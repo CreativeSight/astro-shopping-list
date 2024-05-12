@@ -1,0 +1,106 @@
+<form>
+  <input
+    autofocus
+    type='text'
+    name='product'
+    placeholder='Dodaj produkt'
+    required
+  />
+  <div class='button-wrapper'>
+    <button class='btn-submit' type='submit'>Dodaj</button>
+    <button class='btn-clear' type='button'>Wyczyść listę</button>
+  </div>
+</form>
+
+<style>
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1;
+    margin: 0;
+
+    @media (min-width: 768px) {
+      font-size: 3rem;
+    }
+  }
+
+  input[type='text'] {
+    padding: 0.5em;
+    font-size: 1em;
+    border: 0;
+    border-radius: 0;
+    width: 100%;
+  }
+
+  .button-wrapper {
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+    padding-top: 5px;
+  }
+
+  button {
+    background-color: rgb(29, 104, 194);
+    border: 0;
+    cursor: pointer;
+    padding: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    color: white;
+  }
+
+  .btn-clear {
+    background-color: red;
+  }
+</style>
+
+<script>
+  const form: HTMLFormElement = document.querySelector('form');
+  const shoppingList = document.querySelector('.shopping-list');
+  const clearButton = document.querySelector('.btn-clear');
+  const products = new URLSearchParams(window.location.search).getAll(
+    'product'
+  );
+
+  const markAsBought = (e: Event) => {
+    const listItem = e.target as HTMLLIElement;
+    listItem.classList.toggle('line-through');
+  };
+
+  products.forEach((product) => {
+    const listItem = document.createElement('li');
+
+    listItem.textContent = `${product}`;
+    shoppingList.appendChild(listItem);
+  });
+
+  form.addEventListener('submit', (e: Event) => {
+    e.preventDefault();
+
+    const formData = new FormData(form);
+    const product = `${formData.get('product')}`;
+    const listItem = document.createElement('li');
+    const url = new URL(window.location.href);
+
+    listItem.textContent = `${product}`;
+    shoppingList.appendChild(listItem);
+
+    listItem.addEventListener('click', markAsBought.bind(this));
+
+    url.searchParams.append('product', `${product}`);
+    window.history.pushState({}, '', url);
+
+    form.reset();
+  });
+
+  clearButton.addEventListener('click', () => {
+    shoppingList.textContent = '';
+    window.history.pushState({}, '', window.location.href.split('?')[0]);
+  });
+
+  shoppingList.querySelectorAll('li').forEach((item) => {
+    item.addEventListener('click', markAsBought.bind(this));
+  });
+</script>

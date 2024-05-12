@@ -1,0 +1,46 @@
+---
+import ShoppingForm from '../components/ShoppingForm.astro';
+import ShoppingList from '../components/ShoppingList.astro';
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title='Twoja najlepsza lista zakupowa'>
+  <main>
+    <h1>Twoja najlepsza lista zakupowa</h1>
+    <p>
+      Wpisz produkt, kliknij dodaj, idź na zakupy lub odostępnij komuś link.
+      Wyczyść by zacznąć od nowa.
+    </p>
+    <ShoppingForm />
+    <ShoppingList />
+  </main>
+</Layout>
+
+<style>
+  main {
+    flex: 1;
+    padding: 15px;
+    width: 100%;
+
+    @media (min-width: 992px) {
+      max-width: 60%;
+      margin: auto;
+    }
+  }
+
+  h1 {
+    font-size: 1.3rem;
+    font-weight: strong;
+    line-height: 1.2;
+    margin: 0 0 5px;
+
+    @media (min-width: 768px) {
+      font-size: 3rem;
+    }
+  }
+
+  p {
+    line-height: 1.4;
+    margin: 0 0 10px;
+  }
+</style>
