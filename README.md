@@ -52,3 +52,13 @@ All commands are run from the root of the project, from a terminal:
 ## 👀 Want to learn more?
 
 Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+
+---
+
+## 🚚 Wdrożenie (Hostido)
+
+Każdy push na `master` uruchamia `.github/workflows/deploy.yml`: build Astro w GitHub Actions → `rsync` po SSH do `domains/zakupy.cskl.pl/public_html` → zgłoszenie zmienionych adresów z sitemapy do IndexNow (ręczne uruchomienie z `indexnow_all` zgłasza całą sitemapę).
+
+Sekrety (Settings → Secrets and variables → Actions): `SSH_HOST`, `SSH_PORT`, `SSH_USER`, `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS`.
+
+Nagłówki, przekierowania i cache są w `public/.htaccess`. Wersja pnpm jest przypięta w `packageManager` (`corepack enable`).

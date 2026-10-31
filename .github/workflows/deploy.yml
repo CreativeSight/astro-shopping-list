@@ -1,0 +1,137 @@
+name: Deploy na Hostido (SSH)
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      indexnow_all:
+        description: 'IndexNow: zgłoś wszystkie adresy z sitemapy, nie tylko zmienione'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-hostido
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6 # wersja z pola packageManager w package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Instalacja zależności
+        run: pnpm install --frozen-lockfile
+
+      # Cache zoptymalizowanych obrazów i przyrostowego buildu Astro między wdrożeniami
+      - name: Cache buildu Astro
+        uses: actions/cache@v5
+        with:
+          path: .cache/astro
+          key: astro-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'astro.config.mjs') }}-${{ github.run_id }}
+          restore-keys: |
+            astro-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'astro.config.mjs') }}-
+            astro-${{ runner.os }}-
+
+      - name: Build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm build
+
+      - name: Wysyłka na serwer (rsync po SSH)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          REMOTE_DIR: domains/zakupy.cskl.pl/public_html
+        run: |
+          set -o pipefail
+          for v in SSH_HOST SSH_USER SSH_PRIVATE_KEY; do
+            [ -n "${!v}" ] || { echo "::error::Brak sekretu $v w Settings → Secrets and variables → Actions"; exit 1; }
+          done
+          PORT="${SSH_PORT:-22}"
+
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          sed -i 's/\r$//' ~/.ssh/deploy_key   # usuwa znaki CR (Windows) z wklejonego klucza
+          chmod 600 ~/.ssh/deploy_key
+          if ! ssh-keygen -y -P "" -f ~/.ssh/deploy_key > ~/.ssh/deploy_key.pub 2>/tmp/keyerr; then
+            echo "::error::Nie da się odczytać SSH_PRIVATE_KEY ($(cat /tmp/keyerr)). Klucz ma hasło albo jest wklejony niekompletnie."
+            exit 1
+          fi
+          echo "Odcisk klucza z sekretu (porównaj z kluczem w panelu Hostido):"
+          ssh-keygen -lf ~/.ssh/deploy_key.pub
+
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::Brak sekretu SSH_KNOWN_HOSTS - klucz serwera pobrany przez ssh-keyscan (bez weryfikacji). Dodaj go jako sekret."
+            ssh-keyscan -p "$PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+          SSH="ssh -i ~/.ssh/deploy_key -p $PORT -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes"
+
+          # rsync --delete czyści katalog docelowy, więc najpierw upewniamy się, że to właściwy, istniejący folder
+          if ! $SSH "$SSH_USER@$SSH_HOST" "test -d '$REMOTE_DIR'"; then
+            echo "::error::Na serwerze nie ma katalogu $REMOTE_DIR - sprawdź ścieżkę subdomeny w panelu Hostido"
+            exit 1
+          fi
+
+          # Lista zmienionych plików trafia do /tmp/changed.txt (dla IndexNow)
+          rsync -rlz --checksum --delete --human-readable --stats \
+            --out-format='%i %n' \
+            --exclude='.well-known/' --exclude='cgi-bin/' --exclude='.ftp-deploy-sync-state.json' \
+            -e "$SSH" \
+            ./dist/ "$SSH_USER@$SSH_HOST:$REMOTE_DIR/" | tee /tmp/rsync.log
+          grep -E '^[<>]f' /tmp/rsync.log | sed -E 's/^[^ ]+ //' > /tmp/changed.txt || true
+          echo "Zmienione pliki: $(wc -l < /tmp/changed.txt)"
+
+      - name: IndexNow (Bing, Yandex, Seznam…)
+        continue-on-error: true
+        env:
+          INDEXNOW_KEY: c81a20da0b5d4983a87e879cabe1c03a
+          ALL: ${{ inputs.indexnow_all }}
+          SITE: https://zakupy.cskl.pl
+        run: |
+          # Adresy z sitemapy, których index.html zmienił się w tym wdrożeniu
+          grep -ohE '<loc>[^<]+</loc>' dist/sitemap-*.xml | sed -E 's#</?loc>##g' | grep -v '/sitemap-' | sort -u > /tmp/sitemap.txt
+          grep -E '(^|/)index\.html$' /tmp/changed.txt | sed -E "s#index\.html\$##; s#^#$SITE/#" | sort -u > /tmp/changed-urls.txt || true
+          if [ "$ALL" = "true" ]; then
+            cp /tmp/sitemap.txt /tmp/submit.txt
+          else
+            comm -12 /tmp/sitemap.txt /tmp/changed-urls.txt > /tmp/submit.txt
+          fi
+          echo "W sitemapie: $(wc -l < /tmp/sitemap.txt), zmienione: $(wc -l < /tmp/submit.txt)"
+          if [ ! -s /tmp/submit.txt ]; then echo "::notice::IndexNow: brak zmienionych stron - pominięto"; exit 0; fi
+          head -50 /tmp/submit.txt
+
+          # Treść przez pliki, nie argumenty - tysiące adresów przekraczają limit długości argumentu (exit 126)
+          jq -R . /tmp/submit.txt | jq -sc '.[:10000]' > /tmp/urls.json
+          jq -nc --arg host "${SITE#https://}" --arg key "$INDEXNOW_KEY" \
+            --arg loc "$SITE/$INDEXNOW_KEY.txt" --slurpfile urls /tmp/urls.json \
+            '{host:$host, key:$key, keyLocation:$loc, urlList:$urls[0]}' > /tmp/indexnow.json
+          CODE=$(curl -s -o /tmp/indexnow.txt -w '%{http_code}' -X POST https://api.indexnow.org/indexnow \
+            -H 'Content-Type: application/json; charset=utf-8' --data-binary @/tmp/indexnow.json)
+          echo "IndexNow HTTP $CODE"; cat /tmp/indexnow.txt; echo
+          case "$CODE" in
+            200|202) echo "::notice::IndexNow HTTP $CODE: zgłoszono $(wc -l < /tmp/submit.txt) adresów" ;;
+            403) echo "::warning::IndexNow 403: klucz niedostępny lub niezgodny pod $SITE/$INDEXNOW_KEY.txt" ;;
+            422) echo "::warning::IndexNow 422: adresy nie pasują do hosta $SITE albo klucza" ;;
+            429) echo "::warning::IndexNow 429: za dużo zgłoszeń, spróbuje przy następnym wdrożeniu" ;;
+            *) echo "::warning::IndexNow odpowiedział HTTP $CODE" ;;
+          esac
+
+      - name: Sprzątanie klucza
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
